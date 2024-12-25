@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "build": "rolldown -c",
-    "preview": "node dist/js/index.js"
+    "preview": "node dist/js/index.js",
+    "run": "node src/js/index.js"
   },
   "keywords": [],
   "author": "",
