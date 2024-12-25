@@ -1,0 +1,19 @@
+{
+  "name": "demo-vue",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "build": "rolldown -c",
+    "preview": "node dist/js/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "rolldown": "^0.15.1",
+    "typescript": "^5.7.2"
+  }
+}
