@@ -1,9 +1,9 @@
 import { defineConfig } from 'rolldown'
 
 export default defineConfig({
-  input: 'src/js/index.js',
+  input: 'src/index.js',
   output: {
-    dir: 'dist/js',
+    dir: 'dist',
     format: 'iife',
   },
 })

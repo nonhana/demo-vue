@@ -1,0 +1,6 @@
+export { ref, toRef, toRefs, proxyRefs } from './ref.js'
+export { reactive, shallowReactive } from './reactive.js'
+export { readonly, shallowReadonly } from './readonly.js'
+export { watch } from './watch.js'
+export { computed } from './computed.js'
+export { effect } from './core.js'
