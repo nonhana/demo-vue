@@ -77,6 +77,149 @@ export function createRenderer(options) {
     patchChildren(n1, n2, el)
   }
 
+  // 简单 Diff 算法
+  function simpleDiff(n1, n2, container) {
+    const oldChildren = n1.children
+    const newChildren = n2.children
+
+    // 存储在寻找过程中的最大索引值，用来判断新旧节点的相对位置，是否需要移动节点
+    let lastIndex = 0
+
+    for (let i = 0; i < newChildren.length; i++) {
+      const newVNode = newChildren[i]
+      // 设置一个标志位，标识是否在旧的子节点里面找到可以复用的节点
+      let find = false
+      for (let j = 0; j < oldChildren.length; j++) {
+        const oldVNode = oldChildren[j]
+        if (newVNode.key === oldVNode.key) {
+          // 代码运行到这里，说明已经在旧子节点中找到可以复用的了
+          find = true
+          patch(oldVNode, newVNode, container)
+          if (j < lastIndex) {
+            // 代码运行到这里，说明 newVNode 对应的真实 DOM 需要移动了
+            // 要移动到前一个 VNode 的后面，所以先拿到前一个
+            const prevVNode = newChildren[i - 1]
+            if (prevVNode) {
+              // 因为 insert 的具体实现是 insertBefore，所以要使用 nextSibling 作为锚点插入
+              const anchor = prevVNode.el.nextSibling
+              insert(newVNode.el, container, anchor)
+            }
+          } else {
+            lastIndex = j
+          }
+          break
+        }
+      }
+      // 代码运行到这里，如果 find 为 false 说明当前的 newVNode 没有在旧的一组子节点中找到可以复用的节点
+      // 也就是说是新节点，需要挂载！
+      if (!find) {
+        // 为了将节点挂载到一个正确的位置，需要找准锚点
+        let anchor = null
+        const prevVNode = newChildren[i - 1]
+        if (prevVNode) {
+          anchor = prevVNode.el.nextSibling
+        } else {
+          anchor = container.firstChild
+        }
+        patch(null, newVNode, container, anchor)
+      }
+    }
+
+    // 代码运行到这里，说明已经将新子节点组遍历完了
+    // 遍历旧子节点，拿着 key 去新子节点组找有没有一样的，没有就说明要删除
+    for (let i = 0; i < oldChildren.length; i++) {
+      const oldVNode = oldChildren[i]
+      const has = newChildren.find((vnode) => vnode.key === oldVNode.key)
+      if (!has) {
+        unmount(oldVNode)
+      }
+    }
+  }
+
+  // 双端 Diff 算法
+  function twoEndDiff(n1, n2, container) {
+    const oldChildren = n1.children
+    const newChildren = n2.children
+
+    // 双端 Diff 算法的核心 - 四个 index
+    let oldStartIdx = 0
+    let oldEndIdx = oldChildren.length - 1
+    let newStartIdx = 0
+    let newEndIdx = newChildren.length - 1
+
+    // 四个索引指向的 vnode 节点
+    let oldStartVNode = oldChildren[oldStartIdx]
+    let oldEndVNode = oldChildren[oldEndIdx]
+    let newStartVNode = newChildren[newStartIdx]
+    let newEndVNode = newChildren[newEndIdx]
+
+    // 循环进行双端比较
+    while (oldStartIdx <= oldEndIdx && newStartIdx <= newEndIdx) {
+      if (!oldStartVNode) {
+        oldStartVNode = oldChildren[++oldStartIdx]
+      } else if (!oldEndVNode) {
+        oldEndVNode = oldChildren[--oldEndIdx]
+      } else if (oldStartVNode.key === newStartVNode.key) {
+        patch(oldStartVNode, newStartVNode, container)
+        oldStartVNode = oldChildren[++oldStartIdx]
+        newStartVNode = newChildren[++newStartIdx]
+      } else if (oldEndVNode.key === newEndVNode.key) {
+        // 走到这里，说明位置不变都在尾部，打补丁就好
+        patch(oldEndVNode, newEndVNode, container)
+        // 更新索引与节点值
+        oldEndVNode = oldChildren[--oldEndIdx]
+        newEndVNode = newChildren[--newEndIdx]
+      } else if (oldStartVNode.key === newEndVNode.key) {
+        // 走到这里，说明之前老节点的第一个被移到了最后面
+        patch(oldStartVNode, newEndVNode, container)
+        // 获取尾部节点的下一个兄弟节点作为锚点
+        insert(oldStartVNode.el, container, oldEndVNode.el.nextSibling)
+        oldStartVNode = oldChildren[++oldStartIdx]
+        newEndVNode = newChildren[--newEndIdx]
+      } else if (oldEndVNode.key === newStartVNode.key) {
+        // 走到这里，说明之前老节点的最后一个被移到了最前面
+        // 打补丁补内容
+        patch(oldEndVNode, newStartVNode, container)
+        // 移动 DOM
+        insert(oldEndVNode.el, container, oldStartVNode.el)
+        // 更新索引与节点值
+        oldEndVNode = oldChildren[--oldEndIdx]
+        newStartVNode = newChildren[++newStartIdx]
+      } else {
+        // 走到这里，说明不会命中四个步骤中的任何一个
+        // 特殊处理：拿着新子节点的首节点去旧子节点中找有没有可以复用的
+        const idxInOld = oldChildren.findIndex(
+          (node) => node.key === newStartVNode.key
+        )
+        if (idxInOld > 0) {
+          // 找到了
+          const vnodeToMove = oldChildren[idxInOld]
+          patch(vnodeToMove, newStartVNode, container)
+          insert(vnodeToMove.el, container, oldStartVNode.el)
+          oldChildren[idxInOld] = undefined
+        } else {
+          // 没找到
+          // 说明是新节点得挂载
+          patch(null, newStartVNode, container, oldStartVNode.el)
+        }
+        newStartVNode = newChildren[++newStartIdx]
+      }
+    }
+
+    // 循环结束之后检查索引值，是否有遗漏的情况
+    if (oldEndIdx < oldStartIdx && newStartIdx <= newEndIdx) {
+      // 如果满足，说明新的子节点组中有遗留的节点需要挂载
+      for (let i = newStartIdx; i <= newEndIdx; i++) {
+        patch(null, newChildren[i], container, oldStartVNode.el)
+      }
+    } else if (newEndIdx < newStartIdx && oldStartIdx <= oldEndIdx) {
+      // 如果满足，说明老的子节点组中有多余的节点需要删除
+      for (let i = oldStartIdx; i <= oldEndIdx; i++) {
+        unmount(oldChildren[i])
+      }
+    }
+  }
+
   // 更新子节点
   function patchChildren(n1, n2, container) {
     if (typeof n2.children === 'string') {
@@ -90,82 +233,8 @@ export function createRenderer(options) {
       if (Array.isArray(n1.children)) {
         // 到这里就说明，新、旧子节点都是一组子节点
         // 这里涉及到核心的 Diff 算法
-        // ↓ 以下是 简单 Diff 算法的实现 ↓
-        const oldChildren = n1.children
-        const newChildren = n2.children
-
-        // 存储在寻找过程中的最大索引值，用来判断新旧节点的相对位置，是否需要移动节点
-        let lastIndex = 0
-
-        for (let i = 0; i < newChildren.length; i++) {
-          const newVNode = newChildren[i]
-          let j = 0
-          // 设置一个标志位，标识是否在旧的子节点里面找到可以复用的节点
-          let find = false
-          for (; j < oldChildren.length; j++) {
-            const oldVNode = oldChildren[j]
-            if (newVNode.key === oldVNode.key) {
-              // 代码运行到这里，说明已经在旧子节点中找到可以复用的了
-              find = true
-              patch(oldVNode, newVNode, container)
-              if (j < lastIndex) {
-                // 代码运行到这里，说明 newVNode 对应的真实 DOM 需要移动了
-                // 要移动到前一个 VNode 的后面，所以先拿到前一个
-                const prevVNode = newChildren[i - 1]
-                if (prevVNode) {
-                  const anchor = prevVNode.el.nextSibling
-                  insert(newVNode.el, container, anchor)
-                }
-              } else {
-                lastIndex = j
-              }
-              break
-            }
-          }
-          // 代码运行到这里，如果 find 为 false 说明当前的 newVNode 没有在旧的一组子节点中找到可以复用的节点
-          // 也就是说是新节点，需要挂载！
-          if (!find) {
-            // 为了将节点挂载到一个正确的位置，需要找准锚点
-            let anchor = null
-            const prevVNode = newChildren[i - 1]
-            if (prevVNode) {
-              anchor = prevVNode.el.nextSibling
-            } else {
-              anchor = container.firstChild
-            }
-            patch(null, newVNode, container, anchor)
-          }
-        }
-
-        // 代码运行到这里，说明已经将新子节点组遍历完了
-        // 遍历旧子节点，拿着 key 去新子节点组找有没有一样的，没有就说明要删除
-        for (let i = 0; i < oldChildren.length; i++) {
-          const oldVNode = oldChildren[i]
-          const has = newChildren.find((vnode) => vnode.key === oldVNode.key)
-          if (!has) {
-            unmount(oldVNode)
-          }
-        }
-
-        // const oldLen = oldChildren.length
-        // const newLen = newChildren.length
-        // const commonLength = Math.min(oldLen, newLen)
-
-        // for (let i = 0; i < commonLength; i++) {
-        //   patch(oldChildren[i], newChildren[i])
-        // }
-        // // 新节点数量比旧节点多，需要挂载新的
-        // if (newLen > oldLen) {
-        //   for (let i = commonLength; i < newLen; i++) {
-        //     patch(null, newChildren[i], container)
-        //   }
-        // }
-        // // 旧节点数量比心节点多，需要卸载旧的
-        // else if (oldLen > newLen) {
-        //   for (let i = commonLength; i < oldLen; i++) {
-        //     unmount(oldChildren[i])
-        //   }
-        // }
+        // simpleDiff(n1, n2, container)
+        twoEndDiff(n1, n2, container)
       } else {
         setElementText(container, '')
         n2.children.forEach((c) => patch(null, c, container))
@@ -180,6 +249,7 @@ export function createRenderer(options) {
     }
   }
 
+  // 打补丁更新节点的内容
   function patch(n1, n2, container, anchor) {
     // 如果 n1 存在，则对比 n1 与 n2 的 tag 类型
     if (n1 && n1.type !== n2.type) {
