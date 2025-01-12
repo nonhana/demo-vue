@@ -1,4 +1,5 @@
 import { Text, Comment, Fragment } from './constants.js'
+import { lis } from './utils.js'
 
 // 判断是否是只读属性
 export function shouldSetAsProps(el, key, value) {
@@ -220,6 +221,131 @@ export function createRenderer(options) {
     }
   }
 
+  // 快速 Diff 算法
+  function quickDiff(n1, n2, container) {
+    const newChildren = n2.children
+    const oldChildren = n1.children
+
+    // 1. 对前置节点进行更新
+    let j = 0
+    let oldVNode = oldChildren[j]
+    let newVNode = newChildren[j]
+
+    while (oldVNode.key === newVNode.key) {
+      patch(oldVNode, newVNode, container)
+      j++
+      oldVNode = oldChildren[j]
+      newVNode = newChildren[j]
+    }
+
+    // 2. 对后置节点进行更新
+    let oldEnd = oldChildren.length - 1
+    let newEnd = newChildren.length - 1
+
+    oldVNode = oldChildren[oldEnd]
+    newVNode = newChildren[newEnd]
+
+    while (oldVNode.key === newVNode.key) {
+      patch(oldVNode, newVNode, container)
+      oldVNode = oldChildren[--oldEnd]
+      newVNode = newChildren[--newEnd]
+    }
+
+    // 处理新增节点
+    if (j > oldEnd && j <= newEnd) {
+      const anchorIndex = newEnd + 1
+      const anchor =
+        anchorIndex < newChildren.length ? newChildren[anchorIndex].el : null
+      while (j <= newEnd) {
+        patch(null, newChildren[j++], container, anchor)
+      }
+    }
+    // 处理遗留节点
+    else if (j > newEnd && j <= oldEnd) {
+      while (j <= oldEnd) {
+        unmount(oldChildren[j++])
+      }
+    }
+    // 处理剩余情况
+    else {
+      // 构造 source 数组
+      // 第 i 个位置上的值 n 表示新子节点的第 i 个位置的节点在旧子节点的第 n 个位置
+      // 如 source = [2, 3, 1, -1]，source[0] = 2，表示新子节点的第 0 个位置的节点原来在旧子节点的第 2 个索引
+      const count = newEnd - j + 1
+      const source = Array(count).fill(-1)
+
+      const oldStart = j
+      const newStart = j
+
+      let moved = false
+      let pos = 0
+
+      // 新子节点的 key <-> index 的映射
+      const keyIndex = {}
+      for (let i = newStart; i <= newEnd; i++) {
+        keyIndex[newChildren[i].key] = i
+      }
+
+      let patched = 0 // 代表已更新过的节点数量
+
+      for (let i = oldStart; i <= oldEnd; i++) {
+        if (patched <= count) {
+          oldVNode = oldChildren[i]
+          const k = keyIndex[oldVNode.key]
+
+          if (typeof k !== 'undefined') {
+            newVNode = newChildren[k]
+            patch(oldVNode, newVNode, container)
+            patched++
+            source[k - newStart] = i
+            if (k < pos) {
+              moved = true
+            } else {
+              pos = k
+            }
+          } else {
+            unmount(oldVNode)
+          }
+        } else {
+          unmount(oldVNode)
+        }
+      }
+
+      if (moved) {
+        // 计算 source 的最长递增子序列（LIS）
+        // LIS 的意义是：在新的一组子节点中，重新编号后的哪些索引值的节点在更新前后顺序没有发生变化
+        // 也就是说，LIS 算出来的结果说明了哪些索引的节点是不需要移动的
+        const seq = lis(source)
+
+        // 指向 LIS 的最后一个元素
+        let s = seq.length - 1
+        // 指向新子节点的最后一个元素
+        let i = count - 1
+        for (; i >= 0; i--) {
+          if (source[i] === -1) {
+            // 说明索引为 i 的节点为全新的节点需要被挂载
+            const pos = i + newStart
+            const newVNode = newChildren[pos]
+            const nextPos = pos + 1
+            const anchor =
+              nextPos < newChildren.length ? newChildren[pos].el : null
+            patch(null, newVNode, container, anchor)
+          } else if (i !== seq[s]) {
+            // seq 里面的值都是不需要被移动的值，也就是说不等于就需要被移动
+            const pos = i + newStart
+            const newVNode = newChildren[pos]
+            const nextPos = pos + 1
+            const anchor =
+              nextPos < newChildren.length ? newChildren[nextPos].el : null
+            insert(newVNode.el, container, anchor)
+          } else {
+            s--
+          }
+        }
+      }
+    }
+  }
+
   // 更新子节点
   function patchChildren(n1, n2, container) {
     if (typeof n2.children === 'string') {
@@ -233,8 +359,7 @@ export function createRenderer(options) {
       if (Array.isArray(n1.children)) {
         // 到这里就说明，新、旧子节点都是一组子节点
         // 这里涉及到核心的 Diff 算法
-        // simpleDiff(n1, n2, container)
-        twoEndDiff(n1, n2, container)
+        quickDiff(n1, n2, container)
       } else {
         setElementText(container, '')
         n2.children.forEach((c) => patch(null, c, container))
