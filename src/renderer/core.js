@@ -24,7 +24,11 @@ export function unmount(vnode) {
   }
   // 对于组件的卸载，本质上是要卸载组件所要渲染的内容，也就是 subTree
   else if (typeof vnode.type === 'object') {
-    unmount(vnode.component.subTree)
+    if (vnode.shouldKeepAlive) {
+      vnode.keepAliveInstance._deActivate(vnode)
+    } else {
+      unmount(vnode.component.subTree)
+    }
     return
   }
   const parent = vnode.parentNode
@@ -237,6 +241,19 @@ export function createRenderer(options) {
       isMounted: false,
       subTree: null,
       slots,
+      mounted: [],
+      keepAliveCtx: null,
+    }
+
+    // 检查是否是 KeepAlive 组件
+    const isKeepAlive = vnode.type.__isKeepAlive
+    if (isKeepAlive) {
+      instance.keepAliveCtx = {
+        move(vnode, container, anchor) {
+          insert(vnode.component.subTree.el, container, anchor)
+        },
+        createElement,
+      }
     }
 
     // 处理用户自定义事件的 emit 函数
@@ -659,7 +676,11 @@ export function createRenderer(options) {
     // 2. 如果 type 为 object，则就是我们自己写的 vue 组件
     else if (typeof type === 'object' || typeof type === 'function') {
       if (!n1) {
-        mountComponent(n2, container, anchor)
+        if (n2.keptAlive) {
+          n2.keepAliveInstance._activate(n2, container, anchor)
+        } else {
+          mountComponent(n2, container, anchor)
+        }
       } else {
         patchComponent(n1, n2, anchor)
       }
