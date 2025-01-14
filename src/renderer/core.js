@@ -1,5 +1,11 @@
 import { Text, Comment, Fragment } from './constants.js'
-import { lis } from './utils.js'
+import { lis, queueJob, resolveProps } from './utils.js'
+import {
+  reactive,
+  effect,
+  shallowReadonly,
+  shallowReactive,
+} from '@vue/reactivity'
 
 // 判断是否是只读属性
 export function shouldSetAsProps(el, key, value) {
@@ -9,26 +15,123 @@ export function shouldSetAsProps(el, key, value) {
 }
 
 // 卸载某个 vnode
-// 先拿到要卸载的目标节点的父节点，调用 removeChild 方法
-// ↑ 最标准，符合 W3C 规范
+// 最标准、兼容性最好、符合 W3C 规范的方法是先拿到要卸载的目标节点的父节点，调用 removeChild 方法
 export function unmount(vnode) {
   // 对于 Fragment 节点，它本身不代表任何内容，要卸载它的 children
   if (vnode.type === Fragment) {
     vnode.children.forEach((c) => unmount(c))
     return
   }
+  // 对于组件的卸载，本质上是要卸载组件所要渲染的内容，也就是 subTree
+  else if (typeof vnode.type === 'object') {
+    unmount(vnode.component.subTree)
+    return
+  }
   const parent = vnode.parentNode
   if (parent) parent.removeChild(el)
 }
 
+// 定义异步组件
+export function defineAsyncComponent(options) {
+  if (typeof options === 'function') {
+    options = {
+      loader: options,
+    }
+  }
+
+  const { loader } = options
+
+  let InnerComp = null
+
+  // 记录加载失败后的重试次数
+  let retries = 0
+  function load() {
+    return loader().catch((err) => {
+      if (options.onError) {
+        return new Promise((resolve, reject) => {
+          const retry = () => {
+            resolve(load())
+            retries++
+          }
+          const fail = () => reject(err)
+          options.onError(retry, fail, retries)
+        })
+      } else {
+        throw err
+      }
+    })
+  }
+
+  return {
+    name: 'AsyncComponentWrapper',
+    setup() {
+      const loaded = ref(false)
+      const error = shallowRef(null)
+      const loading = ref(false)
+
+      let loadingTimer = null
+      if (options.delay) {
+        loadingTimer = setTimeout(() => {
+          loading.value = true
+        }, options.delay)
+      } else {
+        loading.value = true
+      }
+
+      load()
+        .then((c) => {
+          InnerComp = c
+          loaded.value = true
+        })
+        .catch((err) => {
+          error.value = err
+        })
+        .finally(() => {
+          loading.value = false
+          clearTimeout(loadingTimer)
+        })
+
+      let timer = null
+      if (options.timeout) {
+        timer = setTimeout(() => {
+          const err = new Error(
+            `Async component time out after ${options.timeout}ms.`
+          )
+        }, options.timeout)
+      }
+      onUnmounted(() => {
+        clearTimeout(timer)
+      })
+
+      const placeholder = { type: Text, children: '' }
+
+      return () => {
+        if (loaded.value) {
+          return { type: InnerComp }
+        } else if (error.value && options.errorComponent) {
+          return {
+            type: options.errorComponent,
+            props: { error: error.value },
+          }
+        } else if (loading.value && options.loadingComponent) {
+          return { type: options.loadingComponent }
+        } else {
+          return placeholder
+        }
+      }
+    },
+  }
+}
+
+// 创建渲染器
 export function createRenderer(options) {
   // 与浏览器 API 解耦，从而能够实现跨平台
   // 在别的平台比如 node 端，传另外一套配置即可
   const {
-    createElement,
-    insert,
+    createElement, // 创建元素的方式
+    insert, // 插入元素的方式
     setElementText,
-    patchProps,
+    patchProps, // 设置属性的方式
     createText,
     setText,
     createComment,
@@ -76,6 +179,166 @@ export function createRenderer(options) {
     }
 
     patchChildren(n1, n2, el)
+  }
+
+  // 全局变量存储当前正在被初始化的组件实例
+  let currentInstance = null
+  function setCurrentInstance(instance) {
+    currentInstance = instance
+  }
+
+  // 生命周期 hook - onMounted
+  function onMounted(fn) {
+    if (currentInstance) {
+      currentInstance.mounted.push(fn)
+    } else {
+      console.error('onMounted 函数只能在 setup 中使用')
+    }
+  }
+
+  // 挂载用户组件
+  function mountComponent(vnode, container, anchor) {
+    const isFunctional = typeof vnode.type === 'function'
+
+    let componentOptions = vnode.type
+
+    if (isFunctional) {
+      componentOptions = {
+        render: vnode.type,
+        props: vnode.type.props,
+      }
+    }
+
+    const {
+      render,
+      data,
+      setup, // setup 函数，提供一种方式处理组合式 API
+      props: propsOption,
+      // 以下是生命周期函数
+      beforeCreate,
+      created,
+      beforeMount,
+      mounted,
+      beforeUpdate,
+      updated,
+    } = componentOptions
+
+    // 在这里调用 beforeCreate 钩子
+    beforeCreate && beforeCreate()
+
+    const state = data ? reactive(data()) : null
+    const [props, attrs] = resolveProps(propsOption, vnode.props)
+
+    // 定义组件实例
+    // 一个组件实例本质上是一个包含组件有关的状态信息的对象
+    const instance = {
+      state,
+      props: shallowReactive(props),
+      isMounted: false,
+      subTree: null,
+      slots,
+    }
+
+    // 处理用户自定义事件的 emit 函数
+    function emit(event, ...payload) {
+      const eventName = `on${event[0].toUpperCase() + event.slice(1)}`
+      const handler = instance.props[eventName]
+      if (handler) {
+        handler(...payload)
+      } else {
+        console.error('事件不存在')
+      }
+    }
+
+    // 处理 slots
+    const slots = vnode.children || {}
+
+    // 在这里处理 setup 函数，在 beforeCreate 之后进行处理
+    const setupContext = { attrs, emit, slots }
+    // 重新设置实例
+    setCurrentInstance(instance)
+    const setupResult = setup(shallowReadonly(instance.props), setupContext)
+    setCurrentInstance(null)
+    let setupState = null
+    // setup 函数的执行结果可能是渲染函数，也可能是对象
+    if (typeof setupResult === 'function') {
+      if (render) console.error('setup 函数返回渲染函数，render 选项将被忽略')
+      render = setupResult
+    } else {
+      setupState = setupResult
+    }
+
+    vnode.component = instance
+
+    // 创建渲染上下文对象，本质上是对组件实例的代理
+    const renderContext = new Proxy(instance, {
+      get(t, k, r) {
+        const { state, props, slots } = t
+        if (k === '$slots') return slots
+        if (state && k in state) {
+          return state[k]
+        } else if (k in props) {
+          return props[k]
+        } else if (setupState && k in setupState) {
+          return setupState[k]
+        } else {
+          console.error('不存在')
+        }
+      },
+      set(t, k, v, r) {
+        const { state, props } = t
+        if (state && k in state) {
+          state[k] = v
+        } else if (k in props) {
+          props[k] = v
+        } else if (setupState && k in setupState) {
+          return setupState[k]
+        } else {
+          console.error('不存在')
+        }
+      },
+    })
+
+    // 在这里调用 created 钩子
+    created && created.call(renderContext)
+
+    effect(
+      () => {
+        const subTree = render.call(state, state) // 渲染函数执行后获取到组件要渲染的内容
+        if (!instance.isMounted) {
+          // 在这里调用 beforeMount 钩子
+          beforeMount && beforeMount.call(state)
+          patch(null, subTree, container, anchor)
+          instance.isMounted = true
+          // 在这里调用 mounted 钩子
+          instance.mounted &&
+            instance.mounted.forEach((hook) => hook.call(renderContext))
+        } else {
+          // 在这里调用 beforeUpdate 钩子
+          beforeUpdate && beforeUpdate.call(state)
+          patch(instance.subTree, subTree, container, anchor)
+          // 在这里调用 updated 钩子
+          updated && updated.call(state)
+        }
+        instance.subTree = subTree
+      },
+      { scheduler: queueJob }
+    )
+  }
+
+  // 更新用户组件
+  function patchComponent(n1, n2, anchor) {
+    const instance = (n2.component = n1.component)
+    const { props } = instance
+    if (hasPropsChanged(n1.props, n2.props)) {
+      const [nextProps] = resolveProps(n2.type.props, n2.props)
+      for (const k in nextProps) {
+        props[k] = nextProps[k]
+      }
+      for (const k in props) {
+        if (!(k in nextProps)) delete props[k]
+      }
+    }
   }
 
   // 简单 Diff 算法
@@ -394,7 +657,12 @@ export function createRenderer(options) {
       }
     }
     // 2. 如果 type 为 object，则就是我们自己写的 vue 组件
-    else if (typeof type === 'object') {
+    else if (typeof type === 'object' || typeof type === 'function') {
+      if (!n1) {
+        mountComponent(n2, container, anchor)
+      } else {
+        patchComponent(n1, n2, anchor)
+      }
     }
     // 3. 文本节点
     else if (type === Text) {

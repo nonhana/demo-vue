@@ -53,7 +53,7 @@ const renderer = createRenderer({
         el.removeEventListener(name, invoker)
       }
     }
-    // 对 class 做特殊处理，因为直接设置 el.className 效率最高
+    // 对 class 做特殊处理，因为直接设置 el.className 性能最好
     else if (key === 'class') {
       el.className = nextValue || ''
     }
