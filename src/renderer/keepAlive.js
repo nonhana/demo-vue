@@ -3,6 +3,10 @@ export function createKeepAlive(instance) {
   const KeepAlive = {
     // KeepAlive 组件独有的标识
     __isKeepAlive: true,
+    props: {
+      include: RegExp,
+      exclude: RegExp,
+    },
     setup(props, { slots }) {
       // 创建一个缓存对象
       // key: vnode.type
@@ -29,6 +33,16 @@ export function createKeepAlive(instance) {
         let rawVNode = slots.default()
         // 非组件的虚拟节点无法被 KeepAlive
         if (typeof rawVNode.type !== 'object') {
+          return rawVNode
+        }
+        // 获取内部组件的 name
+        const name = rawVNode.type.name
+        // 对 name 进行正则匹配
+        if (
+          name &&
+          ((props.include && !props.include.test(name)) ||
+            (props.exclude && props.exclude.test(name)))
+        ) {
           return rawVNode
         }
 

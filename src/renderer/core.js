@@ -673,18 +673,6 @@ export function createRenderer(options) {
         patchElement(n1, n2)
       }
     }
-    // 2. 如果 type 为 object，则就是我们自己写的 vue 组件
-    else if (typeof type === 'object' || typeof type === 'function') {
-      if (!n1) {
-        if (n2.keptAlive) {
-          n2.keepAliveInstance._activate(n2, container, anchor)
-        } else {
-          mountComponent(n2, container, anchor)
-        }
-      } else {
-        patchComponent(n1, n2, anchor)
-      }
-    }
     // 3. 文本节点
     else if (type === Text) {
       // 如果没有旧节点，则进行挂载
@@ -718,6 +706,33 @@ export function createRenderer(options) {
         n2.children.forEach((c) => patch(null, c, container))
       } else {
         patchChildren(n1, n2, container)
+      }
+    }
+    // 5. 检测 Teleport 组件
+    else if (typeof type === 'object' && type.__isTeleport) {
+      type.process(n1, n2, container, anchor, {
+        patch,
+        patchChildren,
+        unmount,
+        move(vnode, container, anchor) {
+          insert(
+            vnode.component ? vnode.component.subTree.el : vnode.el,
+            container,
+            anchor
+          )
+        },
+      })
+    }
+    // 2. 如果 type 为 object，则就是我们自己写的 vue 组件
+    else if (typeof type === 'object' || typeof type === 'function') {
+      if (!n1) {
+        if (n2.keptAlive) {
+          n2.keepAliveInstance._activate(n2, container, anchor)
+        } else {
+          mountComponent(n2, container, anchor)
+        }
+      } else {
+        patchComponent(n1, n2, anchor)
       }
     }
   }
