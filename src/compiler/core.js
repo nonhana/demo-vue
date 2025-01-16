@@ -1,3 +1,4 @@
+// 全部状态
 const State = {
   initial: 1,
   tagOpen: 2,
@@ -7,15 +8,16 @@ const State = {
   tagEndName: 6,
 }
 
+// 判断是否为字母
 function isAlpha(char) {
   return (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z')
 }
 
-// 有限状态机
+// 有限状态机：解析字符串到 tokens
 export function tokenize(str) {
-  let currentState = State.initial
+  let currentState = State.initial // 初始状态
   const chars = [] // 缓存字符
-  const tokens = []
+  const tokens = [] // 解析结果
   // 使用 while 循环开启自动机，只要模板字符串没有被消费完，自动机就会一直运行
   while (str) {
     const char = str[0]
@@ -37,7 +39,7 @@ export function tokenize(str) {
           str = str.slice(1)
         } else if (char === '/') {
           currentState = State.tagEnd
-          str.slice(1)
+          str = str.slice(1)
         }
         break
       case State.tagName:
@@ -57,9 +59,9 @@ export function tokenize(str) {
       case State.text:
         if (isAlpha(char)) {
           chars.push(char)
-          str.slice(1)
+          str = str.slice(1)
         } else if (char === '<') {
-          currentState = State.tagEnd
+          currentState = State.tagOpen
           tokens.push({
             type: 'text',
             content: chars.join(''),
