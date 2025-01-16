@@ -31,8 +31,16 @@ export function unmount(vnode) {
     }
     return
   }
+  const needTransition = vnode.transition
   const parent = vnode.parentNode
-  if (parent) parent.removeChild(el)
+  if (parent) {
+    const performRemove = () => parent.removeChild(vnode.el)
+    if (needTransition) {
+      vnode.transition.leave(vnode.el, performRemove)
+    } else {
+      performRemove()
+    }
+  }
 }
 
 // 定义异步组件
@@ -162,7 +170,15 @@ export function createRenderer(options) {
         patchProps(el, key, null, vnode.props[key])
       }
     }
+    // 判断一个 VNode 是否需要过渡
+    const needTransition = vnode.transition
+    if (needTransition) {
+      vnode.transition.beforeEnter(el)
+    }
     insert(el, container, anchor)
+    if (needTransition) {
+      vnode.transition.enter(el)
+    }
   }
 
   // 更新 vnode
